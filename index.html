@@ -92,8 +92,8 @@
       font-size: 14px;
       display: none;
     }
-    .status.success { display: block; background: #ecfdf5; color: #065f46; }
-    .status.error { display: block; background: #fef2f2; color: #991b1b; }
+    .status.success { display: block; background: #ffffff; color: #1f2937; border-left: 4px solid #1420FF; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 12px; }
+    .status.error { display: block; background: #fff5f5; color: #b91c1c; border-left: 4px solid #ef4444; padding: 12px; }
     .spinner {
       display: inline-block;
       width: 16px; height: 16px;
@@ -171,7 +171,7 @@
 
     mergeBtn.addEventListener('click', async () => {
       status.className = 'status';
-      status.style.display = 'none';
+      status.style.display = '';
       mergeBtn.disabled = true;
       mergeBtn.innerHTML = '<span class="spinner"></span>Merging...';
 
@@ -195,8 +195,17 @@
         a.click();
         URL.revokeObjectURL(url);
 
+        let html = `<strong>Done!</strong> ${stats.totalInput} rows merged into ${stats.totalOutput} (${stats.duplicatesRemoved} duplicates removed).`;
+        if (stats.flagged && stats.flagged.length > 0) {
+          html += `<div style="margin-top:10px;padding:10px;background:#f0f4ff;border:1px solid #1420FF;border-radius:6px;color:#1a1a1a;">
+            <strong> ${stats.flagged.length} username(s) had multiple non-zero score entries:</strong>
+            <ul style="margin-top:6px;padding-left:18px;">
+              ${stats.flagged.map(u => `<li><code>${u}</code></li>`).join('')}
+            </ul>
+          </div>`;
+        }
         status.className = 'status success';
-        status.textContent = `Done! ${stats.totalInput} rows merged into ${stats.totalOutput} (${stats.duplicatesRemoved} duplicates removed).`;
+        status.innerHTML = html;
       } catch (err) {
         status.className = 'status error';
         status.textContent = err.message;

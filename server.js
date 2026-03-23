@@ -59,30 +59,35 @@ app.post('/merge', upload.array('files'), (req, res) => {
       }
     }
 
-    // Merge logic: deduplicate by username, prefer row where Total != 0
-    const merged = new Map();
+    // Group all rows by username
+    const grouped = new Map(); // username -> [{row, totalVal}]
 
     for (const { row, uIdx, tIdx } of allRows) {
       const username = String(row[uIdx] || '').trim();
       if (!username) continue;
-
       const totalVal = Number(row[tIdx]) || 0;
-
-      if (!merged.has(username)) {
-        merged.set(username, { row, totalVal });
-      } else {
-        const existing = merged.get(username);
-        // Keep the one with non-zero total; if both non-zero, keep existing
-        if (existing.totalVal === 0 && totalVal !== 0) {
-          merged.set(username, { row, totalVal });
-        }
-      }
+      if (!grouped.has(username)) grouped.set(username, []);
+      grouped.get(username).push({ row, totalVal });
     }
 
-    // Build output
+    // Build output: for each username decide which rows to keep
     const outputData = [headerRow];
-    for (const { row } of merged.values()) {
-      outputData.push(row);
+    const flagged = []; // usernames with multiple non-zero entries
+
+    for (const [username, entries] of grouped) {
+      const nonZero = entries.filter(e => e.totalVal !== 0);
+
+      if (nonZero.length > 1) {
+        // Multiple non-zero rows: keep all of them consecutively and flag
+        flagged.push(username);
+        for (const e of nonZero) outputData.push(e.row);
+      } else if (nonZero.length === 1) {
+        // Exactly one non-zero: keep it
+        outputData.push(nonZero[0].row);
+      } else {
+        // All zero: keep first occurrence
+        outputData.push(entries[0].row);
+      }
     }
 
     const newWorkbook = XLSX.utils.book_new();
@@ -92,12 +97,13 @@ app.post('/merge', upload.array('files'), (req, res) => {
     const buffer = XLSX.write(newWorkbook, { type: 'buffer', bookType: 'xlsx' });
 
     const totalInput = allRows.length;
-    const totalOutput = merged.size;
+    const totalOutput = outputData.length - 1; // exclude header
     const duplicatesRemoved = totalInput - totalOutput;
 
     res.setHeader('Content-Disposition', 'attachment; filename="merged.xlsx"');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('X-Stats', JSON.stringify({ totalInput, totalOutput, duplicatesRemoved }));
+    res.setHeader('X-Stats', JSON.stringify({ totalInput, totalOutput, duplicatesRemoved, flagged }));
+    res.setHeader('Access-Control-Expose-Headers', 'X-Stats');
     res.send(buffer);
   } catch (err) {
     console.error(err);
