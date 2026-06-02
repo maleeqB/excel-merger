@@ -4,7 +4,7 @@ const XLSX = require('xlsx');
 const path = require('path');
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
@@ -13,7 +13,7 @@ app.get('/', (req, res) => {
 app.post('/merge', upload.array('files'), (req, res) => {
   try {
     if (!req.files || req.files.length < 2) {
-      return res.status(400).json({ error: 'Please upload at least 2 Excel files.' });
+      return res.status(400).json({ error: 'Please upload at least 2 files.' });
     }
 
     // Parse all uploaded files
@@ -23,7 +23,10 @@ app.post('/merge', upload.array('files'), (req, res) => {
     let usernameColIndex = -1;
 
     for (const file of req.files) {
-      const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+      const isCSV = file.originalname.toLowerCase().endsWith('.csv');
+      const workbook = isCSV
+        ? XLSX.read(file.buffer.toString('utf8'), { type: 'string' })
+        : XLSX.read(file.buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
@@ -73,42 +76,54 @@ app.post('/merge', upload.array('files'), (req, res) => {
     // Build output: for each username decide which rows to keep
     const outputData = [headerRow];
     const flagged = []; // usernames with multiple non-zero entries
+    let zeroDropped = 0;
 
     for (const [username, entries] of grouped) {
       const nonZero = entries.filter(e => e.totalVal !== 0);
 
       if (nonZero.length > 1) {
-        // Multiple non-zero rows: keep all of them consecutively and flag
-        flagged.push(username);
-        for (const e of nonZero) outputData.push(e.row);
+        const uniqueScores = new Set(nonZero.map(e => e.totalVal));
+        if (uniqueScores.size === 1) {
+          // Same score across files — plain duplicate, keep first
+          outputData.push(nonZero[0].row);
+          zeroDropped += entries.length - 1;
+        } else {
+          // Genuinely different scores — keep all and flag
+          flagged.push(username);
+          for (const e of nonZero) outputData.push(e.row);
+        }
       } else if (nonZero.length === 1) {
-        // Exactly one non-zero: keep it
+        // Exactly one non-zero: keep it, drop the zero-score duplicates
         outputData.push(nonZero[0].row);
+        zeroDropped += entries.length - 1;
       } else {
         // All zero: keep first occurrence
         outputData.push(entries[0].row);
+        zeroDropped += entries.length - 1;
       }
     }
 
-    const newWorkbook = XLSX.utils.book_new();
     const newSheet = XLSX.utils.aoa_to_sheet(outputData);
-    XLSX.utils.book_append_sheet(newWorkbook, newSheet, 'Merged');
-
-    const buffer = XLSX.write(newWorkbook, { type: 'buffer', bookType: 'xlsx' });
+    const csvOutput = XLSX.utils.sheet_to_csv(newSheet);
 
     const totalInput = allRows.length;
     const totalOutput = outputData.length - 1; // exclude header
-    const duplicatesRemoved = totalInput - totalOutput;
 
-    res.setHeader('Content-Disposition', 'attachment; filename="merged.xlsx"');
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('X-Stats', JSON.stringify({ totalInput, totalOutput, duplicatesRemoved, flagged }));
+    res.setHeader('Content-Disposition', 'attachment; filename="merged.csv"');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('X-Stats', JSON.stringify({ totalInput, totalOutput, zeroDropped, flagged }));
     res.setHeader('Access-Control-Expose-Headers', 'X-Stats');
-    res.send(buffer);
+    res.send(csvOutput);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong processing the files.' });
   }
+});
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ error: err.message || 'Something went wrong.' });
 });
 
 const PORT = 3000;

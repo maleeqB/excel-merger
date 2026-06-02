@@ -92,8 +92,8 @@
       font-size: 14px;
       display: none;
     }
-    .status.success { display: block; background: #ffffff; color: #1f2937; border-left: 4px solid #1420FF; box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 12px; }
-    .status.error { display: block; background: #fff5f5; color: #b91c1c; border-left: 4px solid #ef4444; padding: 12px; }
+    .status.success { display: block; background: #f0f4ff; color: #1f2937; border-radius: 6px; padding: 12px; }
+    .status.error { display: block; background: #fff5f5; color: #b91c1c; border-radius: 6px; padding: 12px; }
     .spinner {
       display: inline-block;
       width: 16px; height: 16px;
@@ -109,15 +109,15 @@
 </head>
 <body>
   <div class="container">
-    <h1>Excel Merger</h1>
+    <h1>CSV Merger</h1>
     <p class="subtitle">
-      Upload 2 or more Excel files to merge. Duplicate usernames are resolved
-      by keeping the entry with a non-zero Total.
+      Upload 2 or more CSV files to merge. Duplicate usernames are resolved
+      by keeping the entry with a non-zero Total. Excel files (.xlsx, .xls) are also accepted.
     </p>
 
     <div class="drop-zone" id="dropZone">
-      <p>Drop Excel files here or click to browse</p>
-      <input type="file" id="fileInput" multiple accept=".xlsx,.xls" hidden>
+      <p>Drop CSV files here or click to browse</p>
+      <input type="file" id="fileInput" multiple accept=".csv,.xlsx,.xls" hidden>
     </div>
 
     <div class="file-list" id="fileList"></div>
@@ -182,8 +182,9 @@
         const res = await fetch('/merge', { method: 'POST', body: formData });
 
         if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || 'Merge failed');
+          let msg = 'Merge failed';
+          try { const e = await res.json(); msg = e.error || msg; } catch {}
+          throw new Error(msg);
         }
 
         const stats = JSON.parse(res.headers.get('X-Stats') || '{}');
@@ -191,11 +192,12 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'merged.xlsx';
+        const basenames = files.map(f => f.name.replace(/\.[^/.]+$/, ''));
+        a.download = basenames.join('_') + '.csv';
         a.click();
         URL.revokeObjectURL(url);
 
-        let html = `<strong>Done!</strong> ${stats.totalInput} rows merged into ${stats.totalOutput} (${stats.duplicatesRemoved} duplicates removed).`;
+        let html = `<strong>Done!</strong> ${stats.totalInput} rows merged into ${stats.totalOutput} (${stats.zeroDropped} zero-score duplicate${stats.zeroDropped !== 1 ? 's' : ''} removed).`;
         if (stats.flagged && stats.flagged.length > 0) {
           html += `<div style="margin-top:10px;padding:10px;background:#f0f4ff;border:1px solid #1420FF;border-radius:6px;color:#1a1a1a;">
             <strong> ${stats.flagged.length} username(s) had multiple non-zero score entries:</strong>
