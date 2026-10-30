@@ -6,6 +6,10 @@ const path = require('path');
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+// A workbook may declare a range it does not hold: the <dimension> element is
+// attacker-controlled metadata, so sheet_to_json has to be bounded at read time.
+const MAX_ROWS = 10000;
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -25,10 +29,18 @@ app.post('/merge', upload.array('files'), (req, res) => {
     for (const file of req.files) {
       const isCSV = file.originalname.toLowerCase().endsWith('.csv');
       const workbook = isCSV
-        ? XLSX.read(file.buffer.toString('utf8'), { type: 'string' })
-        : XLSX.read(file.buffer, { type: 'buffer' });
+        ? XLSX.read(file.buffer.toString('utf8'), { type: 'string', sheetRows: MAX_ROWS + 1 })
+        : XLSX.read(file.buffer, { type: 'buffer', sheetRows: MAX_ROWS + 1 });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
+      // sheetRows makes SheetJS range-check against the rows it actually parsed
+      // rather than trusting <dimension>; a workbook longer than the cap is
+      // refused here instead of being silently truncated.
+      if (sheet && sheet['!fullref'] && sheet['!fullref'] !== sheet['!ref']) {
+        return res.status(413).json({
+          error: `File "${file.originalname}" has more than ${MAX_ROWS} rows.`
+        });
+      }
       const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
       if (data.length === 0) continue;
